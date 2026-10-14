@@ -43,6 +43,7 @@ class ANPRDetector:
 
         # Cached OCR text per spatial plate box
         self.plate_text_cache: Dict[str, str] = {}
+        self.cached_detections: List[Dict] = []
         self.ocr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
         self.pending_ocr = set()
 

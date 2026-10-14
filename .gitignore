@@ -17,6 +17,10 @@ data/
 captured_faces/
 records/
 runs/
+captures/
+buffer/
+logs/
+frontend/icons/
 *.log
 
 # Model weights & binaries (exceed GitHub size limits or are binary artifacts)

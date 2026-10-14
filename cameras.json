@@ -1,0 +1,39 @@
+[
+  {
+    "camera_id": "cam_001",
+    "atm_id": "ATM_BRANCH_01",
+    "label": "Cam 0 - ATM Vestibule Main",
+    "source": 0,
+    "enabled": true,
+    "roi": [
+      [120, 80],
+      [520, 80],
+      [580, 470],
+      [60, 470]
+    ],
+    "resolution": [640, 480]
+  },
+  {
+    "camera_id": "cam_002",
+    "atm_id": "ATM_BRANCH_01",
+    "label": "Cam 1 - ATM Kiosk PIN Pad View",
+    "source": 1,
+    "enabled": true,
+    "roi": [
+      [100, 60],
+      [540, 60],
+      [600, 460],
+      [40, 460]
+    ],
+    "resolution": [640, 480]
+  },
+  {
+    "camera_id": "cam_003",
+    "atm_id": "ATM_BRANCH_02",
+    "label": "Cam 2 - Remote Branch Kiosk (RTSP Sample)",
+    "source": "rtsp://admin:pass@192.168.1.100:554/stream1",
+    "enabled": false,
+    "roi": [],
+    "resolution": [640, 480]
+  }
+]

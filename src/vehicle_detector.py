@@ -82,12 +82,14 @@ class VehicleTracker:
             PROJECT_ROOT / "models" / "vehicle_detection" / "master_vehicle_model" / "weights" / "best.pt",
             PROJECT_ROOT / "models" / "vehicle_detection" / "best.pt",
             PROJECT_ROOT / "models" / "vehicle_detection" / "master_vehicle_model" / "weights" / "last.pt",
+            PROJECT_ROOT / "yolo11n.pt",
+            PROJECT_ROOT / "yolo11s.pt",
             PROJECT_ROOT / "yolov8s.pt",
         ]
         for c in candidates:
             if c.is_file() and c.stat().st_size > 100000:
                 return c
-        return Path("yolov8s.pt")
+        return Path("yolo11n.pt")
 
     def _iou(self, b1: Tuple[int, int, int, int], b2: Tuple[int, int, int, int]) -> float:
         x1, y1, w1, h1 = b1

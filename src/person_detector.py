@@ -266,8 +266,8 @@ class AutomaticPersonTracker:
     # ------------------------------------------------------------------ #
 
     def process_frame(
-        self, frame_rgb: np.ndarray
-    ) -> tuple[np.ndarray, list[dict], int, bool]:
+        self, frame_rgb: np.ndarray, auto_save_snapshots: bool = False
+    ) -> tuple[np.ndarray, list[dict], int, list[str]]:
         """
         Strict detection-confirmed hybrid pipeline with live Face Verification:
         - Matches against known_faces/ folder:
@@ -345,7 +345,7 @@ class AutomaticPersonTracker:
         # ------ Face Verification & Render Bounding Boxes ------
         annotated_img = frame_rgb.copy()
         updated_tracks = []
-        has_unauthorized = False
+        new_saved_paths: list[str] = []
         fh, fw = frame_rgb.shape[:2]
 
         for person in self.tracked_persons:
@@ -355,6 +355,13 @@ class AutomaticPersonTracker:
             x, y, w, h = person.bbox
             cx, cy = person.center
             pid = person.person_id
+
+            # Save snapshot if auto_save_snapshots is requested and person is newly tracked
+            if auto_save_snapshots and pid not in self.saved_person_ids:
+                saved_path = self._save_snapshot(frame_rgb, pid, (x, y, w, h))
+                if saved_path:
+                    self.saved_person_ids.add(pid)
+                    new_saved_paths.append(saved_path)
 
             # Crop face/person for verification
             x1, y1 = max(0, x), max(0, y)
@@ -377,7 +384,6 @@ class AutomaticPersonTracker:
                 color_rgb = (255, 0, 0)    # Red in RGB
                 accent_rgb = (255, 165, 0) # Orange
                 label_str = "UNAUTHORIZED / UNKNOWN"
-                has_unauthorized = True
 
             # Main bounding box
             cv2.rectangle(annotated_img, (x, y), (x + w, y + h), color_rgb, 3)
@@ -410,4 +416,4 @@ class AutomaticPersonTracker:
             })
 
         person_count = len(updated_tracks)
-        return annotated_img, updated_tracks, person_count, has_unauthorized
+        return annotated_img, updated_tracks, person_count, new_saved_paths

@@ -1,7 +1,13 @@
 """
 CCTV AI Vision System — Streamlit Surveillance Console & Cybersecurity Hub
 ===========================================================================
-Real-time Human Tracking, Face Tracking, ANPR OCR & 10-Vector Cybersecurity Health Monitor.
+Real-time 6-Pipeline Surveillance Engine:
+1. Human Detection & Tracking (YOLOv8)
+2. Face Recognition (YuNet DNN + SFace)
+3. License Plate Detection (YOLOv8-OBB) + Async EasyOCR
+4. Multi-Class Vehicle Classification (Bus, Car, Bike, Truck, Van, etc.)
+5. Crowd Density Estimation & Surge Detection (Heatmap Overlay)
+6. 10-Vector Cybersecurity Health Watchdog + SQLite Database
 """
 
 from __future__ import annotations
@@ -30,10 +36,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.anpr_detector import ANPRDetector
+from src.crowd_detector import CrowdDetector
 from src.cyber_health_monitor import cyber_monitor
+from src.db_manager import db_manager
 from src.face_tracker import FastFaceTracker
 from src.human_detector import HumanTracker
 from src.plate_recorder import PlateRecorder
+from src.vehicle_detector import VehicleTracker
 
 
 # =============================================================================
@@ -41,7 +50,7 @@ from src.plate_recorder import PlateRecorder
 # =============================================================================
 
 st.set_page_config(
-    page_title="CCTV AI Vision Hub | Multi-AI & Cybersecurity",
+    page_title="IBVAP — CCTV AI Vision Hub | Multi-AI & Cybersecurity",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -50,7 +59,7 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Dark Futuristic Theme */
+    /* Dark Futuristic Glassmorphism Theme */
     .stApp {
         background-color: #0b0d13;
         color: #e2e8f0;
@@ -107,14 +116,14 @@ st.markdown(
         background: rgba(18, 22, 33, 0.85);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 10px;
-        padding: 14px;
+        padding: 12px;
         text-align: center;
         backdrop-filter: blur(10px);
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
     }
     
     .metric-val {
-        font-size: 26px;
+        font-size: 24px;
         font-weight: 700;
         color: #00ff8c;
         margin: 4px 0 0 0;
@@ -122,7 +131,7 @@ st.markdown(
     }
     
     .metric-lbl {
-        font-size: 12px;
+        font-size: 11px;
         color: #94a3b8;
         text-transform: uppercase;
         letter-spacing: 1px;
@@ -205,9 +214,19 @@ def load_face_trackers() -> Tuple[FastFaceTracker, FastFaceTracker]:
     return FastFaceTracker(max_alerts_per_person=3), FastFaceTracker(max_alerts_per_person=3)
 
 
-@st.cache_resource(show_spinner="Loading YOLO Human Tracker Checkpoint...")
+@st.cache_resource(show_spinner="Loading YOLO Human Tracker Checkpoints...")
 def load_human_trackers(device: str) -> Tuple[HumanTracker, HumanTracker]:
     return HumanTracker(device=device), HumanTracker(device=device)
+
+
+@st.cache_resource(show_spinner="Loading YOLO Multi-Class Vehicle Trackers...")
+def load_vehicle_trackers(device: str) -> Tuple[VehicleTracker, VehicleTracker]:
+    return VehicleTracker(device=device), VehicleTracker(device=device)
+
+
+@st.cache_resource(show_spinner="Loading Crowd Density & Heatmap Engine...")
+def load_crowd_detectors(device: str) -> Tuple[CrowdDetector, CrowdDetector]:
+    return CrowdDetector(device=device), CrowdDetector(device=device)
 
 
 class DualCameraManager:
@@ -310,6 +329,7 @@ def draw_header_banner(
     humans: int,
     faces: int,
     plates: int,
+    vehicles: int = 0,
     is_live: bool = True,
 ) -> np.ndarray:
     h, w = frame.shape[:2]
@@ -326,17 +346,17 @@ def draw_header_banner(
     title = f"{label.upper()} | {device_name}"
     cv2.putText(
         frame, title, (30, 22),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.50, (240, 240, 245), 1, cv2.LINE_AA,
+        cv2.FONT_HERSHEY_SIMPLEX, 0.46, (240, 240, 245), 1, cv2.LINE_AA,
     )
 
-    badge_text = f"HUMANS: {humans}  |  FACES: {faces}  |  PLATES: {plates}"
-    (bw, _), _ = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
-    badge_x = w - bw - 15
-    cv2.rectangle(frame, (badge_x - 8, 5), (w - 8, 28), (28, 32, 44), -1)
-    cv2.rectangle(frame, (badge_x - 8, 5), (w - 8, 28), (60, 70, 95), 1)
+    badge_text = f"HUMANS:{humans} | FACES:{faces} | PLATES:{plates} | VEHICLES:{vehicles}"
+    (bw, _), _ = cv2.getTextSize(badge_text, cv2.FONT_HERSHEY_SIMPLEX, 0.38, 1)
+    badge_x = w - bw - 12
+    cv2.rectangle(frame, (badge_x - 6, 5), (w - 6, 28), (28, 32, 44), -1)
+    cv2.rectangle(frame, (badge_x - 6, 5), (w - 6, 28), (60, 70, 95), 1)
     cv2.putText(
         frame, badge_text, (badge_x, 21),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 255, 200), 1, cv2.LINE_AA,
+        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 200), 1, cv2.LINE_AA,
     )
     return frame
 
@@ -349,9 +369,11 @@ def combine_dual_feeds(
     h_count0: int,
     f_count0: int,
     p_count0: int,
+    v_count0: int,
     h_count1: int,
     f_count1: int,
     p_count1: int,
+    v_count1: int,
     target_h: int = 480,
 ) -> np.ndarray:
     h0, w0 = frame0.shape[:2]
@@ -362,8 +384,8 @@ def combine_dual_feeds(
     w1_res = int(w1 * (target_h / h1))
     f1_res = cv2.resize(frame1, (w1_res, target_h))
 
-    draw_header_banner(f0_res, "Feed A", dev0_name, h_count0, f_count0, p_count0)
-    draw_header_banner(f1_res, "Feed B", dev1_name, h_count1, f_count1, p_count1)
+    draw_header_banner(f0_res, "Feed A", dev0_name, h_count0, f_count0, p_count0, v_count0)
+    draw_header_banner(f1_res, "Feed B", dev1_name, h_count1, f_count1, p_count1, v_count1)
 
     combined = np.hstack((f0_res, f1_res))
     cv2.line(combined, (w0_res, 0), (w0_res, target_h), (0, 255, 140), 2)
@@ -386,14 +408,14 @@ def main():
         if is_live
         else '<span class="status-badge status-stopped">○ STREAM IDLE</span>'
     )
-    
+
     st.markdown(
         f"""
         <div class="cctv-header">
             <div>
-                <h1 class="cctv-title">🛡️ CCTV AI Surveillance & Cybersecurity Hub</h1>
+                <h1 class="cctv-title">🛡️ IBVAP — Intelligent Surveillance & Cyber-Health Hub</h1>
                 <p style="color: #94a3b8; margin: 4px 0 0 0; font-size: 14px;">
-                    Human Tracking, SFace Offline Face Recognition, ANPR OCR & 10-Vector Cybersecurity Health Monitor
+                    Full 6-Pipeline Offline AI: Humans, Faces, ANPR OCR, Vehicles, Crowd Heatmaps & 10-Vector Security Watchdog
                 </p>
             </div>
             <div>{status_html}</div>
@@ -447,42 +469,48 @@ def main():
         rtsp_url = st.sidebar.text_input("RTSP Stream URL", value="rtsp://")
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🎯 AI Detection Modes")
+    st.sidebar.markdown("### 🎯 Active AI Detection Modes")
 
     detection_mode = st.sidebar.radio(
-        "Active AI Pipeline",
+        "Pipeline Selection",
         options=[
-            "All-In-One (Humans + Faces + Plates)",
+            "All 6 AI Engines (Humans, Faces, Plates, Vehicles, Crowd)",
+            "Humans & Crowd Density",
+            "Vehicles & ANPR License Plates",
+            "Face Recognition & Biometrics",
             "Human Tracking Only",
-            "Face Recognition Only",
-            "Number Plates (ANPR) Only",
-            "Dual AI (Faces + Plates)",
+            "Vehicle Classification Only",
         ],
         index=0,
     )
-    if detection_mode == "Human Tracking Only":
-        ai_mode = "humans"
-    elif detection_mode == "Face Recognition Only":
+
+    if detection_mode == "Humans & Crowd Density":
+        ai_mode = "humans_crowd"
+    elif detection_mode == "Vehicles & ANPR License Plates":
+        ai_mode = "vehicles_plates"
+    elif detection_mode == "Face Recognition & Biometrics":
         ai_mode = "faces"
-    elif detection_mode == "Number Plates (ANPR) Only":
-        ai_mode = "plates"
-    elif detection_mode == "Dual AI (Faces + Plates)":
-        ai_mode = "both"
+    elif detection_mode == "Human Tracking Only":
+        ai_mode = "humans"
+    elif detection_mode == "Vehicle Classification Only":
+        ai_mode = "vehicles"
     else:
         ai_mode = "all"
 
     with st.sidebar.expander("🔧 Model Sensitivity & Hardware", expanded=False):
         device = st.selectbox("Inference Accelerator", options=["cuda:0", "cpu"] if torch.cuda.is_available() else ["cpu"], index=0)
         enable_ocr = st.checkbox("Enable EasyOCR Text Extraction", value=True)
+        enable_crowd_heatmap = st.checkbox("Show Crowd Density Heatmap Overlay", value=True)
         conf_human = st.slider("Human Detector Conf Threshold", min_value=0.10, max_value=0.90, value=0.40, step=0.05)
+        conf_vehicle = st.slider("Vehicle Detector Conf Threshold", min_value=0.10, max_value=0.90, value=0.35, step=0.05)
         conf_anpr = st.slider("ANPR Detection Conf Threshold", min_value=0.10, max_value=0.90, value=0.35, step=0.05)
         conf_face = st.slider("Face Detector Conf Threshold", min_value=0.10, max_value=0.90, value=0.50, step=0.05)
         cooldown_sec = st.slider("Plate Deduplication Cooldown (s)", min_value=5, max_value=120, value=45, step=5)
 
     plate_recorder = PlateRecorder(cooldown_seconds=cooldown_sec)
 
-    # Top Metrics Row
-    m_col1, m_col2, m_col3, m_col4, m_col5, m_col6 = st.columns(6)
+    # Top Metrics Row (7 Cards)
+    m_col1, m_col2, m_col3, m_col4, m_col5, m_col6, m_col7 = st.columns(7)
     with m_col1:
         fps_metric = st.empty()
         fps_metric.markdown('<div class="metric-card"><p class="metric-lbl">Live FPS</p><p class="metric-val">0.0</p></div>', unsafe_allow_html=True)
@@ -493,12 +521,15 @@ def main():
         faces_metric = st.empty()
         faces_metric.markdown('<div class="metric-card"><p class="metric-lbl">Faces</p><p class="metric-val">0</p></div>', unsafe_allow_html=True)
     with m_col4:
+        vehicles_metric = st.empty()
+        vehicles_metric.markdown('<div class="metric-card"><p class="metric-lbl">Vehicles</p><p class="metric-val">0</p></div>', unsafe_allow_html=True)
+    with m_col5:
         plates_metric = st.empty()
         plates_metric.markdown('<div class="metric-card"><p class="metric-lbl">Plates</p><p class="metric-val">0</p></div>', unsafe_allow_html=True)
-    with m_col5:
-        total_plates_metric = st.empty()
-        total_plates_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Logged</p><p class="metric-val">{len(plate_recorder.recent_logs)}</p></div>', unsafe_allow_html=True)
     with m_col6:
+        crowd_metric = st.empty()
+        crowd_metric.markdown('<div class="metric-card"><p class="metric-lbl">Crowd Flow</p><p class="metric-val">NORMAL</p></div>', unsafe_allow_html=True)
+    with m_col7:
         gpu_status_metric = st.empty()
         serv_stat = cyber_monitor.metrics.get("service", None)
         h_grade = serv_stat.status if serv_stat else "OPTIMAL"
@@ -509,13 +540,13 @@ def main():
 
     tab_live, tab_records, tab_cyber = st.tabs([
         "📺 Live Surveillance Feed",
-        "📋 Plate Records Database",
+        "📋 Historical Database & Logs",
         "🛡️ Cybersecurity & System Health",
     ])
 
     with tab_cyber:
         st.markdown("### 🛡️ IBVAP Cybersecurity & System Health Center")
-        st.caption("Continuous real-time verification of 10 system and biometric security vectors.")
+        st.caption("Continuous real-time verification of 10 system, model, and biometric security vectors.")
 
         audit = cyber_monitor.run_full_audit()
         c_cols = st.columns(2)
@@ -549,47 +580,69 @@ def main():
             st.dataframe(hash_df, use_container_width=True, height=200)
 
         st.markdown("#### 📜 Security Event Audit Logs")
-        if cyber_monitor.security_logs:
+        alerts_df = db_manager.get_recent_alerts(limit=50)
+        if not alerts_df.empty:
+            st.dataframe(alerts_df, use_container_width=True, height=200)
+        elif cyber_monitor.security_logs:
             st.dataframe(pd.DataFrame(cyber_monitor.security_logs), use_container_width=True, height=180)
         else:
             st.info("No security violations or alerts recorded in current session.")
 
     with tab_records:
-        csv_file_path = PROJECT_ROOT / "records" / "number_plates" / "plate_records.csv"
-        if csv_file_path.exists():
-            try:
-                df = pd.read_csv(csv_file_path)
-                if not df.empty:
-                    r_col1, r_col2, r_col3 = st.columns([2, 2, 1])
-                    with r_col1:
-                        search_query = st.text_input("🔍 Search Plate Number", value="")
-                    with r_col2:
-                        unique_cams = ["All"] + list(df["Camera"].dropna().unique())
-                        selected_cam = st.selectbox("Filter by Camera", options=unique_cams)
-                    with r_col3:
-                        st.write("")
-                        st.write("")
-                        st.download_button(
-                            "📥 Download CSV",
-                            data=df.to_csv(index=False).encode("utf-8"),
-                            file_name="plate_records.csv",
-                            mime="text/csv",
-                            use_container_width=True,
-                        )
+        st.markdown("### 🗄️ Unified Surveillance Database & Analytics")
+        r_tab_plate, r_tab_veh, r_tab_face, r_tab_crowd = st.tabs([
+            "💳 ANPR Number Plates",
+            "🚗 Vehicle Classification",
+            "👤 Face Recognition Logs",
+            "👥 Crowd Surge Events",
+        ])
 
-                    filtered_df = df.copy()
-                    if search_query:
-                        filtered_df = filtered_df[filtered_df["PlateNumber"].astype(str).str.contains(search_query.upper(), na=False)]
-                    if selected_cam != "All":
-                        filtered_df = filtered_df[filtered_df["Camera"] == selected_cam]
+        with r_tab_plate:
+            plate_df = db_manager.get_recent_anpr(limit=100)
+            if not plate_df.empty:
+                st.dataframe(plate_df, use_container_width=True, height=300)
+                st.download_button(
+                    "📥 Export Plates to CSV",
+                    data=plate_df.to_csv(index=False).encode("utf-8"),
+                    file_name="anpr_records.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info("No license plate records found in database.")
 
-                    st.dataframe(filtered_df.iloc[::-1], use_container_width=True, height=350)
-                else:
-                    st.info("No license plate records logged yet.")
-            except Exception as e:
-                st.error(f"Error loading records: {e}")
-        else:
-            st.info("No license plate records CSV found.")
+        with r_tab_veh:
+            veh_df = db_manager.get_recent_vehicles(limit=100)
+            if not veh_df.empty:
+                st.dataframe(veh_df, use_container_width=True, height=300)
+                st.download_button(
+                    "📥 Export Vehicles to CSV",
+                    data=veh_df.to_csv(index=False).encode("utf-8"),
+                    file_name="vehicle_records.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info("No vehicle classification records logged yet.")
+
+        with r_tab_face:
+            face_df = db_manager.get_recent_faces(limit=100)
+            if not face_df.empty:
+                st.dataframe(face_df, use_container_width=True, height=300)
+                st.download_button(
+                    "📥 Export Faces to CSV",
+                    data=face_df.to_csv(index=False).encode("utf-8"),
+                    file_name="face_logs.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info("No biometric face logs recorded yet.")
+
+        with r_tab_crowd:
+            conn = db_manager._get_connection()
+            crowd_df = pd.read_sql_query("SELECT * FROM crowd_events ORDER BY id DESC LIMIT 100", conn)
+            if not crowd_df.empty:
+                st.dataframe(crowd_df, use_container_width=True, height=300)
+            else:
+                st.info("No crowd surge events recorded.")
 
     with tab_live:
         btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 4])
@@ -603,8 +656,6 @@ def main():
         if stop_btn:
             st.session_state.streaming = False
 
-        security_alert_placeholder = st.empty()
-
         feed_col, alerts_col = st.columns([3, 1])
 
         with feed_col:
@@ -612,7 +663,7 @@ def main():
             video_placeholder.info("Click **Start Live Stream** above to activate camera feeds and AI recognition.")
 
         with alerts_col:
-            st.markdown("#### 🚨 Real-Time ANPR Alerts")
+            st.markdown("#### 🚨 Real-Time Security Alerts")
             alerts_placeholder = st.empty()
 
         if st.session_state.streaming:
@@ -624,6 +675,10 @@ def main():
             human_tracker_0, human_tracker_1 = load_human_trackers(device=device)
             human_tracker_0.conf_threshold = conf_human
             human_tracker_1.conf_threshold = conf_human
+            vehicle_tracker_0, vehicle_tracker_1 = load_vehicle_trackers(device=device)
+            vehicle_tracker_0.conf_threshold = conf_vehicle
+            vehicle_tracker_1.conf_threshold = conf_vehicle
+            crowd_detector_0, crowd_detector_1 = load_crowd_detectors(device=device)
 
             cam_manager = None
             cap_single = None
@@ -646,13 +701,16 @@ def main():
                     return
 
             prev_time = time.time()
+            frame_counter = 0
 
             try:
                 while st.session_state.streaming:
-                    h_count0, f_count0, p_count0 = 0, 0, 0
-                    h_count1, f_count1, p_count1 = 0, 0, 0
+                    frame_counter += 1
+                    h_count0, f_count0, p_count0, v_count0 = 0, 0, 0, 0
+                    h_count1, f_count1, p_count1, v_count1 = 0, 0, 0, 0
                     alert_unk0, alert_unk1 = 0, 0
                     total_unk0, total_unk1 = 0, 0
+                    crowd_res0, crowd_res1 = None, None
                     out_frame = None
 
                     if cam_manager is not None:
@@ -669,15 +727,44 @@ def main():
                         process_cam0 = (layout_key in ["dual", "0"]) and ret0
                         process_cam1 = (layout_key in ["dual", "1"]) and ret1
 
-                        # Human Tracking
-                        if ai_mode in ["humans", "all"]:
-                            if process_cam0:
-                                out_cam0, _, h_count0 = human_tracker_0.process_frame(out_cam0)
-                            if process_cam1:
-                                out_cam1, _, h_count1 = human_tracker_1.process_frame(out_cam1)
+                        boxes0 = []
+                        boxes1 = []
 
-                        # Face Recognition
-                        if ai_mode in ["faces", "both", "all"]:
+                        # 1. Human Tracking
+                        if ai_mode in ["humans", "humans_crowd", "all"]:
+                            if process_cam0:
+                                out_cam0, h_dets0, h_count0 = human_tracker_0.process_frame(out_cam0)
+                                boxes0 = [d["bbox"] for d in h_dets0] if isinstance(h_dets0, list) and h_dets0 and isinstance(h_dets0[0], dict) else []
+                            if process_cam1:
+                                out_cam1, h_dets1, h_count1 = human_tracker_1.process_frame(out_cam1)
+                                boxes1 = [d["bbox"] for d in h_dets1] if isinstance(h_dets1, list) and h_dets1 and isinstance(h_dets1[0], dict) else []
+
+                        # 2. Crowd Density & Heatmap
+                        if ai_mode in ["humans_crowd", "all"]:
+                            if process_cam0:
+                                out_cam0, crowd_res0 = crowd_detector_0.analyze_crowd(out_cam0, boxes0, generate_overlay=enable_crowd_heatmap)
+                                if crowd_res0.is_surge_alert and frame_counter % 30 == 0:
+                                    db_manager.log_crowd_event(f"Cam {cam0_id}", crowd_res0.estimated_count, crowd_res0.density_level, True)
+                            if process_cam1:
+                                out_cam1, crowd_res1 = crowd_detector_1.analyze_crowd(out_cam1, boxes1, generate_overlay=enable_crowd_heatmap)
+                                if crowd_res1.is_surge_alert and frame_counter % 30 == 0:
+                                    db_manager.log_crowd_event(f"Cam {cam1_id}", crowd_res1.estimated_count, crowd_res1.density_level, True)
+
+                        # 3. Vehicle Classification
+                        if ai_mode in ["vehicles", "vehicles_plates", "all"]:
+                            if process_cam0:
+                                out_cam0, v_recs0, v_count0 = vehicle_tracker_0.process_frame(out_cam0, run_detection=(frame_counter % 2 == 0))
+                                for vr in v_recs0:
+                                    if frame_counter % 30 == 0:
+                                        db_manager.log_vehicle(f"Cam {cam0_id}", vr.get("class", "Vehicle"), vr.get("track_id", 0), vr.get("confidence", 0.0))
+                            if process_cam1:
+                                out_cam1, v_recs1, v_count1 = vehicle_tracker_1.process_frame(out_cam1, run_detection=(frame_counter % 2 == 1))
+                                for vr in v_recs1:
+                                    if frame_counter % 30 == 0:
+                                        db_manager.log_vehicle(f"Cam {cam1_id}", vr.get("class", "Vehicle"), vr.get("track_id", 0), vr.get("confidence", 0.0))
+
+                        # 4. Face Recognition
+                        if ai_mode in ["faces", "all"]:
                             if process_cam0:
                                 out_cam0, f_count0 = face_tracker_0.process_frame(out_cam0)
                                 alert_unk0 = face_tracker_0.active_alerting_unknown_count
@@ -687,8 +774,8 @@ def main():
                                 alert_unk1 = face_tracker_1.active_alerting_unknown_count
                                 total_unk1 = face_tracker_1.total_unknown_count
 
-                        # ANPR
-                        if ai_mode in ["plates", "both", "all"]:
+                        # 5. ANPR Plate Detection
+                        if ai_mode in ["plates", "vehicles_plates", "all"]:
                             if process_cam0:
                                 out_cam0, p_dets0, p_count0 = anpr_detector.process_frame(out_cam0)
                                 for det in p_dets0:
@@ -701,6 +788,7 @@ def main():
                                             plate_crop_bgr=det.get("crop"),
                                         )
                                         if is_new:
+                                            db_manager.log_anpr(f"Cam {cam0_id}", cleaned, det.get("conf", 0.0), "Vehicle")
                                             st.session_state.latest_plates.insert(
                                                 0,
                                                 {"text": cleaned, "time": datetime.now().strftime("%H:%M:%S"), "cam": f"Cam {cam0_id}"}
@@ -720,6 +808,7 @@ def main():
                                             plate_crop_bgr=det.get("crop"),
                                         )
                                         if is_new:
+                                            db_manager.log_anpr(f"Cam {cam1_id}", cleaned, det.get("conf", 0.0), "Vehicle")
                                             st.session_state.latest_plates.insert(
                                                 0,
                                                 {"text": cleaned, "time": datetime.now().strftime("%H:%M:%S"), "cam": f"Cam {cam1_id}"}
@@ -732,15 +821,15 @@ def main():
                                 out_cam0, out_cam1,
                                 dev0_name=cam_manager.dev0_name,
                                 dev1_name=cam_manager.dev1_name,
-                                h_count0=h_count0, f_count0=f_count0, p_count0=p_count0,
-                                h_count1=h_count1, f_count1=f_count1, p_count1=p_count1,
+                                h_count0=h_count0, f_count0=f_count0, p_count0=p_count0, v_count0=v_count0,
+                                h_count1=h_count1, f_count1=f_count1, p_count1=p_count1, v_count1=v_count1,
                             )
                         elif layout_key == "0":
                             out_frame = out_cam0
-                            draw_header_banner(out_frame, "Feed A", cam_manager.dev0_name, h_count0, f_count0, p_count0)
+                            draw_header_banner(out_frame, "Feed A", cam_manager.dev0_name, h_count0, f_count0, p_count0, v_count0)
                         else:  # "1"
                             out_frame = out_cam1
-                            draw_header_banner(out_frame, "Feed B", cam_manager.dev1_name, h_count1, f_count1, p_count1)
+                            draw_header_banner(out_frame, "Feed B", cam_manager.dev1_name, h_count1, f_count1, p_count1, v_count1)
 
                     elif cap_single is not None:
                         ret, raw = cap_single.read()
@@ -752,13 +841,24 @@ def main():
                                 break
 
                         out_cam0 = raw.copy()
-                        if ai_mode in ["humans", "all"]:
-                            out_cam0, _, h_count0 = human_tracker_0.process_frame(out_cam0)
-                        if ai_mode in ["faces", "both", "all"]:
+                        boxes0 = []
+
+                        if ai_mode in ["humans", "humans_crowd", "all"]:
+                            out_cam0, h_dets0, h_count0 = human_tracker_0.process_frame(out_cam0)
+                            boxes0 = [d["bbox"] for d in h_dets0] if isinstance(h_dets0, list) and h_dets0 and isinstance(h_dets0[0], dict) else []
+
+                        if ai_mode in ["humans_crowd", "all"]:
+                            out_cam0, crowd_res0 = crowd_detector_0.analyze_crowd(out_cam0, boxes0, generate_overlay=enable_crowd_heatmap)
+
+                        if ai_mode in ["vehicles", "vehicles_plates", "all"]:
+                            out_cam0, _, v_count0 = vehicle_tracker_0.process_frame(out_cam0)
+
+                        if ai_mode in ["faces", "all"]:
                             out_cam0, f_count0 = face_tracker_0.process_frame(out_cam0)
                             alert_unk0 = face_tracker_0.active_alerting_unknown_count
                             total_unk0 = face_tracker_0.total_unknown_count
-                        if ai_mode in ["plates", "both", "all"]:
+
+                        if ai_mode in ["plates", "vehicles_plates", "all"]:
                             out_cam0, p_dets0, p_count0 = anpr_detector.process_frame(out_cam0)
                             for det in p_dets0:
                                 p_text = det.get("text", "")
@@ -770,6 +870,7 @@ def main():
                                         plate_crop_bgr=det.get("crop"),
                                     )
                                     if is_new:
+                                        db_manager.log_anpr("Video Stream", cleaned, det.get("conf", 0.0), "Vehicle")
                                         st.session_state.latest_plates.insert(
                                             0,
                                             {"text": cleaned, "time": datetime.now().strftime("%H:%M:%S"), "cam": "Stream"}
@@ -777,7 +878,7 @@ def main():
                                         if len(st.session_state.latest_plates) > 6:
                                             st.session_state.latest_plates.pop()
 
-                        draw_header_banner(out_cam0, "Source", "Active Feed", h_count0, f_count0, p_count0)
+                        draw_header_banner(out_cam0, "Source", "Active Feed", h_count0, f_count0, p_count0, v_count0)
                         out_frame = out_cam0
 
                     curr_time = time.time()
@@ -786,19 +887,30 @@ def main():
 
                     total_humans = h_count0 + h_count1
                     total_faces = f_count0 + f_count1
-                    active_alerts = alert_unk0 + alert_unk1
-                    total_unknown_faces = total_unk0 + total_unk1
+                    total_vehicles = v_count0 + v_count1
                     total_plates = p_count0 + p_count1
+                    active_alerts = alert_unk0 + alert_unk1
+
+                    # Crowd Status summary
+                    crowd_label = "NORMAL"
+                    if crowd_res0 and crowd_res0.is_surge_alert:
+                        crowd_label = crowd_res0.density_level
+                    elif crowd_res1 and crowd_res1.is_surge_alert:
+                        crowd_label = crowd_res1.density_level
 
                     if active_alerts > 0:
                         cyber_monitor.record_unauthorized_face_event(active_alerts, "Live Surveillance Feed")
+                        db_manager.log_system_alert("UNAUTHORIZED_BIOMETRIC", "CRITICAL", f"{active_alerts} unrecognized face(s) in restricted zone")
 
-
+                    # Update top metric cards
                     fps_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Live FPS</p><p class="metric-val">{fps:.1f}</p></div>', unsafe_allow_html=True)
                     humans_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Humans</p><p class="metric-val">{total_humans}</p></div>', unsafe_allow_html=True)
                     faces_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Faces</p><p class="metric-val">{total_faces}</p></div>', unsafe_allow_html=True)
+                    vehicles_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Vehicles</p><p class="metric-val">{total_vehicles}</p></div>', unsafe_allow_html=True)
                     plates_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Plates</p><p class="metric-val">{total_plates}</p></div>', unsafe_allow_html=True)
-                    total_plates_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Logged</p><p class="metric-val">{len(plate_recorder.recent_logs)}</p></div>', unsafe_allow_html=True)
+                    
+                    c_color = "#ef4444" if "CRITICAL" in crowd_label else ("#f59e0b" if "HIGH" in crowd_label else "#00ff8c")
+                    crowd_metric.markdown(f'<div class="metric-card"><p class="metric-lbl">Crowd Flow</p><p class="metric-val" style="color: {c_color};">{crowd_label}</p></div>', unsafe_allow_html=True)
 
                     if st.session_state.latest_plates:
                         alerts_html = ""
