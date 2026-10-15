@@ -64,23 +64,14 @@ KNOWN_FACES_DIR = os.path.join(BASE_DIR, "known_faces")
 REPORTS_DIR = os.path.join(CAPTURES_DIR, "forensic_reports")
 MODELS_DIR = os.path.join(BASE_DIR, "models")
 FACE_MODELS_DIR = os.path.join(MODELS_DIR, "face")
-WEAPON_MODELS_DIR = os.path.join(MODELS_DIR, "weapon")
 
 # Pre-trained Face Model Paths
 YUNET_MODEL_PATH = os.path.join(FACE_MODELS_DIR, "face_detection_yunet_2023mar.onnx")
 SFACE_MODEL_PATH = os.path.join(FACE_MODELS_DIR, "face_recognition_sface_2021dec.onnx")
 
-# Custom Weapon Detection Model Paths (25-Epoch Custom Trained on RTX 3050)
-WEAPON_WEIGHTS_PATH = os.path.join(WEAPON_MODELS_DIR, "weights", "best.pt")
-WEAPON_25EPOCH_WEIGHTS = os.path.join(WEAPON_MODELS_DIR, "run_25epochs", "weights", "best.pt")
-WEAPON_RUN_WEIGHTS = os.path.join(WEAPON_MODELS_DIR, "run", "weights", "best.pt")
-WEAPON_LAST_WEIGHTS = os.path.join(WEAPON_MODELS_DIR, "run", "weights", "last.pt")
-WEAPON_ONNX_PATH = os.path.join(WEAPON_MODELS_DIR, "weights", "best.onnx")
-
 os.makedirs(CAPTURES_DIR, exist_ok=True)
 os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
 os.makedirs(REPORTS_DIR, exist_ok=True)
-os.makedirs(WEAPON_MODELS_DIR, exist_ok=True)
 
 # Color Palette Constants
 CLR_BG = (0.97, 0.98, 0.99, 1.0)
@@ -365,25 +356,6 @@ class FaceTraceApp(App):
         self.last_detection_time = 0.0
         self.current_live_metrics = {"Sharpness": 0, "Lighting": 0, "Face angle": 0, "Face visible": 0, "Resolution": 0, "quality": 0}
 
-        # Weapon Threat Detection State
-        self.weapon_detector = None
-        self.weapon_detection_enabled = True
-        self.live_weapon_detected = False
-        self.live_weapon_boxes = []
-        self.live_weapon_conf = 0.0
-        self.is_weapon_alert_showing = False
-        self.last_weapon_alert_time = 0.0
-        self.weapon_alert_popup = None
-        self.latest_weapon_crop_path = None
-        self._weapon_frame_counter = 0
-        self._cached_weapon_detections = []
-        self.btn_weapon_threat_badge = None
-        self.btn_weapon_toggle = None
-        self.lbl_weapon_status = None
-        self.lbl_weapon_sub = None
-        self.pb_weapon_threat = None
-        self.weapon_threat_card = None
-
     def build(self):
         self.title = "FaceTrace — ATM Multi-Camera Video Analytics (YuNet DNN & SFace)"
         
@@ -396,9 +368,6 @@ class FaceTraceApp(App):
 
         # 2. Initialize Pre-Trained Face Models (YuNet DNN Detector + SFace Recognizer)
         self._init_pretrained_face_models()
-
-        # 2b. Initialize Custom-Trained YOLOv8 Weapon Detection Model
-        self._init_weapon_model()
 
         # 3. Load Actual Suspect Watchlist from known_faces/ using SFace Embeddings
         self.watchlist_items = self._load_known_watchlist()
@@ -500,26 +469,6 @@ class FaceTraceApp(App):
 
         # Fallback Haar cascade if needed
         self.face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-
-    def _init_weapon_model(self):
-        """Loads the custom-trained YOLOv8 Weapon Detection Model."""
-        self.weapon_detector = None
-        try:
-            from ultralytics import YOLO
-            candidates = [
-                WEAPON_WEIGHTS_PATH,
-                WEAPON_25EPOCH_WEIGHTS,
-                WEAPON_RUN_WEIGHTS,
-                WEAPON_LAST_WEIGHTS
-            ]
-            for p in candidates:
-                if os.path.exists(p):
-                    self.weapon_detector = YOLO(p)
-                    print(f"[FaceTrace] Loaded Custom YOLOv8 Weapon Detection Model (25 Epochs): {p}")
-                    return
-            print("[FaceTrace] Notice: Weapon model weights not found in models/weapon/")
-        except Exception as e:
-            print(f"[FaceTrace] Note on weapon detector load: {e}")
 
     # -------------------------------------------------------------------------
     # DISK DATA INGESTION: REAL WATCHLIST (PRE-TRAINED EMBEDDINGS) & CASES
@@ -809,21 +758,7 @@ class FaceTraceApp(App):
         nav.add_widget(BoxLayout())
 
         # Right Action Items
-        right_box = BoxLayout(orientation="horizontal", size_hint_x=None, width=640, spacing=10)
-
-        # Weapon Threat Indicator Pill
-        self.btn_weapon_threat_badge = Button(
-            text="🛡️ Weapon AI: ACTIVE",
-            color=CLR_GREEN,
-            bold=True,
-            font_size="11sp",
-            background_normal="",
-            background_color=CLR_GREEN_BG,
-            size_hint_x=None,
-            width=155
-        )
-        self.btn_weapon_threat_badge.bind(on_press=lambda x: self._toggle_weapon_detection())
-        right_box.add_widget(self.btn_weapon_threat_badge)
+        right_box = BoxLayout(orientation="horizontal", size_hint_x=None, width=470, spacing=10)
 
         # Camera Selector (Dual, Cam 0, Cam 1)
         cam_opts = ["Dual Camera View (Cam 0 + Cam 1)"]
@@ -978,20 +913,6 @@ class FaceTraceApp(App):
         self.btn_auto_toggle.bind(on_press=lambda x: self._toggle_auto_capture())
         actions_row.add_widget(self.btn_auto_toggle)
 
-        # Weapon Detection AI Toggle Badge
-        self.btn_weapon_toggle = Button(
-            text="🛡️ Weapon AI: ACTIVE",
-            size_hint_x=None,
-            width=150,
-            background_normal="",
-            background_color=CLR_GREEN_BG,
-            color=CLR_GREEN,
-            bold=True,
-            font_size="11sp"
-        )
-        self.btn_weapon_toggle.bind(on_press=lambda x: self._toggle_weapon_detection())
-        actions_row.add_widget(self.btn_weapon_toggle)
-
         btn_snap = Button(
             text="📸 Capture Now",
             size_hint_x=None,
@@ -1058,56 +979,6 @@ class FaceTraceApp(App):
             self.btn_auto_toggle.color = CLR_TEXT_MUTED
             self.auto_capture_state = "IDLE"
             self.auto_session_buffer = []
-
-    def _toggle_weapon_detection(self):
-        self.weapon_detection_enabled = not self.weapon_detection_enabled
-        if self.weapon_detection_enabled:
-            status_text = "🛡️ Weapon AI: ACTIVE"
-            bg = CLR_GREEN_BG
-            fg = CLR_GREEN
-            msg = "Custom YOLOv8 weapon detection is ACTIVE.\nReal-time multi-camera surveillance scans for firearms, blades & tactical hazards."
-        else:
-            status_text = "○ Weapon AI: DISABLED"
-            bg = CLR_BORDER_LIGHT
-            fg = CLR_TEXT_MUTED
-            self.live_weapon_detected = False
-            self.live_weapon_conf = 0.0
-            self._cached_weapon_detections = []
-            msg = "Custom YOLOv8 weapon detection is DISABLED.\nCamera feeds will run face detection & FIQA only."
-
-        if hasattr(self, "btn_weapon_toggle") and self.btn_weapon_toggle:
-            self.btn_weapon_toggle.text = status_text
-            self.btn_weapon_toggle.background_color = bg
-            self.btn_weapon_toggle.color = fg
-
-        if hasattr(self, "btn_weapon_threat_badge") and self.btn_weapon_threat_badge:
-            self.btn_weapon_threat_badge.text = status_text
-            self.btn_weapon_threat_badge.background_color = bg
-            self.btn_weapon_threat_badge.color = fg
-
-        if hasattr(self, "lbl_weapon_status") and self.lbl_weapon_status:
-            self.lbl_weapon_status.text = "[b]● WEAPON SCANNER: ACTIVE[/b]" if self.weapon_detection_enabled else "[b]○ WEAPON SCANNER: PAUSED[/b]"
-            self.lbl_weapon_status.color = CLR_GREEN if self.weapon_detection_enabled else CLR_TEXT_MUTED
-
-        if hasattr(self, "pb_weapon_threat") and self.pb_weapon_threat and not self.weapon_detection_enabled:
-            self.pb_weapon_threat.value = 0
-
-        self._show_info_popup("Weapon Threat Engine", msg)
-
-    def _show_weapon_model_info_popup(self):
-        w_status = "Loaded & Ready (models/weapon/weights/best.pt)" if self.weapon_detector is not None else "Model not loaded"
-        self._show_info_popup(
-            "YOLOv8 Weapon Detection Model",
-            f"Architecture: Ultralytics YOLOv8 Nano (YOLOv8n)\n"
-            f"Training: 25 Epochs on Weapon Detection Dataset (RTX 3050 CUDA)\n"
-            f"Weights: models/weapon/weights/best.pt (6.16 MB)\n"
-            f"Accuracy: 42.1% mAP50 • 50.8% Precision • 52.2% Recall\n"
-            f"Inference Speed: ~4.2 ms per frame (230+ FPS)\n"
-            f"Classes: [Weapon] (Firearms, Handguns, Knives, Blades)\n"
-            f"Status: {w_status}\n\n"
-            f"Visual reticle: Solid Crimson Hazard Box with Amber Corner Ticks\n"
-            f"Concurrently active alongside YuNet & SFace biometrics."
-        )
 
     # -------------------------------------------------------------------------
     # 3. COLUMN 1: CASE LIST (LEFT PANEL) - STRICTLY REAL DATA OR EMPTY
@@ -1741,105 +1612,6 @@ class FaceTraceApp(App):
 
         self.right_container.add_widget(metrics_card)
 
-        # E. Weapon Threat Matrix Card (Custom YOLOv8 Engine)
-        self.weapon_threat_card = CardPanel(
-            bg_color=CLR_CRIMSON_BG if self.live_weapon_detected else CLR_WHITE,
-            border_color=CLR_CRIMSON if self.live_weapon_detected else CLR_BORDER,
-            radius=8,
-            orientation="vertical",
-            size_hint_y=None,
-            height=138,
-            padding=[12, 8, 12, 8],
-            spacing=4
-        )
-
-        hdr_row = BoxLayout(orientation="horizontal", size_hint_y=None, height=18)
-        lbl_wt_title = Label(
-            text="[b]🚨 Weapon Threat Matrix (YOLOv8)[/b]",
-            markup=True,
-            font_size="12sp",
-            color=CLR_CRIMSON if self.live_weapon_detected else CLR_TEXT_MAIN,
-            size_hint_x=0.72,
-            halign="left"
-        )
-        lbl_wt_title.bind(size=lbl_wt_title.setter("text_size"))
-        hdr_row.add_widget(lbl_wt_title)
-
-        lbl_engine_tag = Label(
-            text="25-EPOCH NANO",
-            font_size="8sp",
-            color=CLR_TEXT_MUTED,
-            size_hint_x=0.28,
-            halign="right"
-        )
-        lbl_engine_tag.bind(size=lbl_engine_tag.setter("text_size"))
-        hdr_row.add_widget(lbl_engine_tag)
-        self.weapon_threat_card.add_widget(hdr_row)
-
-        # Status text & sub
-        w_status = "[b]⚠️ ARMED WEAPON: ACTIVE ALERT[/b]" if self.live_weapon_detected else ("[b]✓ SYSTEM SECURE: NO THREATS[/b]" if self.weapon_detection_enabled else "[b]○ WEAPON DETECTION PAUSED[/b]")
-        w_color = CLR_CRIMSON if self.live_weapon_detected else (CLR_GREEN if self.weapon_detection_enabled else CLR_TEXT_MUTED)
-        self.lbl_weapon_status = Label(
-            text=w_status,
-            markup=True,
-            font_size="11sp",
-            color=w_color,
-            size_hint_y=None,
-            height=18,
-            halign="left"
-        )
-        self.lbl_weapon_status.bind(size=self.lbl_weapon_status.setter("text_size"))
-        self.weapon_threat_card.add_widget(self.lbl_weapon_status)
-
-        w_sub = f"Threat Confidence: {int(self.live_weapon_conf * 100)}% • Firearm/Blade Class" if self.live_weapon_detected else ("YOLOv8 25-epoch neural model active on RTX 3050 GPU." if self.weapon_detection_enabled else "Sensor feed disabled by investigator.")
-        self.lbl_weapon_sub = Label(
-            text=w_sub,
-            font_size="9sp",
-            color=CLR_TEXT_MUTED,
-            size_hint_y=None,
-            height=14,
-            halign="left"
-        )
-        self.lbl_weapon_sub.bind(size=self.lbl_weapon_sub.setter("text_size"))
-        self.weapon_threat_card.add_widget(self.lbl_weapon_sub)
-
-        # Threat progress bar
-        self.pb_weapon_threat = ProgressBar(
-            max=100,
-            value=int(self.live_weapon_conf * 100) if self.live_weapon_detected else 0,
-            size_hint_y=None,
-            height=10
-        )
-        self.weapon_threat_card.add_widget(self.pb_weapon_threat)
-
-        # Weapon Action Row
-        w_actions = BoxLayout(orientation="horizontal", size_hint_y=None, height=26, spacing=6)
-        btn_w_test = Button(
-            text="Inspect Model",
-            font_size="9sp",
-            background_normal="",
-            background_color=CLR_BORDER_LIGHT,
-            color=CLR_TEXT_MAIN,
-            size_hint_x=0.5
-        )
-        btn_w_test.bind(on_press=lambda x: self._show_weapon_model_info_popup())
-        w_actions.add_widget(btn_w_test)
-
-        btn_w_toggle = Button(
-            text="Disable" if self.weapon_detection_enabled else "Enable",
-            font_size="9sp",
-            bold=True,
-            background_normal="",
-            background_color=CLR_RED_BG if self.weapon_detection_enabled else CLR_GREEN_BG,
-            color=CLR_RED if self.weapon_detection_enabled else CLR_GREEN,
-            size_hint_x=0.5
-        )
-        btn_w_toggle.bind(on_press=lambda x: self._toggle_weapon_detection())
-        w_actions.add_widget(btn_w_toggle)
-
-        self.weapon_threat_card.add_widget(w_actions)
-        self.right_container.add_widget(self.weapon_threat_card)
-
     def _update_people_display(self):
         """Updates the people linked to this withdrawal dynamically based on real detection."""
         self.people_list_box.clear_widgets()
@@ -2352,113 +2124,6 @@ class FaceTraceApp(App):
                             "quality": metrics["quality"]
                         })
 
-        # ---------------------------------------------------------------------
-        # 2. CUSTOM-TRAINED YOLOV8 WEAPON THREAT DETECTION PASS
-        # ---------------------------------------------------------------------
-        current_frame_weapons = []
-        if self.weapon_detection_enabled and self.weapon_detector is not None:
-            self._weapon_frame_counter += 1
-            # Run inference every 2nd frame or when cache empty (45+ FPS real-time)
-            if self._weapon_frame_counter % 2 == 0 or not self._cached_weapon_detections:
-                try:
-                    w_res = self.weapon_detector.predict(frame, conf=0.20, imgsz=320, verbose=False)
-                    cached_w = []
-                    if w_res and len(w_res) > 0 and w_res[0].boxes is not None:
-                        for wb in w_res[0].boxes:
-                            wxy = wb.xyxy[0].cpu().numpy()
-                            wc_val = float(wb.conf[0].cpu().numpy())
-                            wx1 = max(0, int(wxy[0]))
-                            wy1 = max(0, int(wxy[1]))
-                            wx2 = min(w, int(wxy[2]))
-                            wy2 = min(h, int(wxy[3]))
-                            ww = wx2 - wx1
-                            wh = wy2 - wy1
-                            if ww > 15 and wh > 15:
-                                cached_w.append((wx1, wy1, ww, wh, wc_val))
-                    self._cached_weapon_detections = cached_w
-                except Exception as ex:
-                    print(f"[WeaponDetector] Error during live inference: {ex}")
-
-            current_frame_weapons = self._cached_weapon_detections
-
-        # Process and annotate detected weapons
-        if current_frame_weapons:
-            self.live_weapon_detected = True
-            max_w_conf = max(w_item[4] for w_item in current_frame_weapons)
-            self.live_weapon_conf = max_w_conf
-            display_conf = int(round(max_w_conf * 100))
-
-            # Update Right Breakdown Card & Top Badge
-            if hasattr(self, "lbl_weapon_status") and self.lbl_weapon_status:
-                self.lbl_weapon_status.text = f"[b]⚠️ ARMED WEAPON: ACTIVE ALERT ({display_conf}%)[/b]"
-                self.lbl_weapon_status.color = CLR_CRIMSON
-            if hasattr(self, "lbl_weapon_sub") and self.lbl_weapon_sub:
-                self.lbl_weapon_sub.text = f"Threat Confidence: {display_conf}% • Firearm/Blade Class"
-            if hasattr(self, "pb_weapon_threat") and self.pb_weapon_threat:
-                self.pb_weapon_threat.value = display_conf
-            if hasattr(self, "weapon_threat_card") and self.weapon_threat_card:
-                self.weapon_threat_card.bg_color = CLR_CRIMSON_BG
-                self.weapon_threat_card.border_color = CLR_CRIMSON
-            if hasattr(self, "btn_weapon_threat_badge") and self.btn_weapon_threat_badge:
-                self.btn_weapon_threat_badge.text = f"🚨 WEAPON ALERT ({display_conf}%)"
-                self.btn_weapon_threat_badge.background_color = CLR_CRIMSON_BG
-                self.btn_weapon_threat_badge.color = CLR_CRIMSON
-
-            for (wx, wy, ww, wh, wconf) in current_frame_weapons:
-                # 1. DISTINCT VISUAL RETICLE: Double Solid Crimson Hazard Border
-                # (Inner Crimson Box + Outer Hazard Amber Line)
-                cv2.rectangle(frame, (wx, wy), (wx + ww, wy + wh), (20, 20, 220), 2)
-                cv2.rectangle(frame, (max(0, wx - 2), max(0, wy - 2)), (min(w, wx + ww + 2), min(h, wy + wh + 2)), (0, 165, 255), 1)
-
-                # 2. Diagonal Hazard Corner Ticks (Distinct from face open brackets)
-                ts = 14
-                cv2.line(frame, (wx, wy + ts), (wx + ts, wy), (0, 215, 255), 2)
-                cv2.line(frame, (wx + ww - ts, wy), (wx + ww, wy + ts), (0, 215, 255), 2)
-                cv2.line(frame, (wx, wy + wh - ts), (wx + ts, wy + wh), (0, 215, 255), 2)
-                cv2.line(frame, (wx + ww - ts, wy + wh), (wx + ww, wy + wh - ts), (0, 215, 255), 2)
-
-                # 3. Solid Crimson Hazard Header Tag
-                conf_pct = min(99, max(50, int(50 + (wconf - 0.15) * 140))) if wconf < 0.50 else int(wconf * 100)
-                badge_text = f"[!] ARMED WEAPON: {conf_pct}%"
-                cv2.rectangle(frame, (wx, max(0, wy - 24)), (wx + 210, max(0, wy)), (20, 20, 220), -1)
-                cv2.putText(frame, badge_text, (wx + 6, max(16, wy - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 2)
-
-                # 4. Save crop for alert popup
-                w_crop_y1 = max(0, wy - 10)
-                w_crop_y2 = min(h, wy + wh + 10)
-                w_crop_x1 = max(0, wx - 10)
-                w_crop_x2 = min(w, wx + ww + 10)
-                w_crop = frame[w_crop_y1:w_crop_y2, w_crop_x1:w_crop_x2].copy()
-
-                # Trigger Automatic Weapon Alert Modal (Docked in bottom right)
-                if wconf >= 0.15:
-                    self._trigger_automatic_weapon_alert(w_crop, conf_pct / 100.0, cam_label)
-
-            # Top Emergency Banner (Multi-threat coordination)
-            has_suspect_match = (len(parsed_faces) > 0 and self.live_watchlist_match["matched"])
-            if has_suspect_match:
-                cv2.rectangle(frame, (0, 0), (w, 36), (0, 0, 180), -1)
-                cv2.putText(frame, f"CODE RED: ARMED WATCHLIST SUSPECT IN ATM VESTIBULE! ({self.live_watchlist_match['name']})", (15, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
-            else:
-                cv2.rectangle(frame, (0, 0), (w, 32), (20, 20, 220), -1)
-                cv2.putText(frame, f"SECURITY ALERT: ARMED WEAPON DETECTED! ({cam_label})", (15, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
-
-        else:
-            self.live_weapon_detected = False
-            self.live_weapon_conf = 0.0
-            if hasattr(self, "lbl_weapon_status") and self.lbl_weapon_status:
-                self.lbl_weapon_status.text = "[b]✓ SYSTEM SECURE: NO THREATS[/b]" if self.weapon_detection_enabled else "[b]○ WEAPON DETECTION PAUSED[/b]"
-                self.lbl_weapon_status.color = CLR_GREEN if self.weapon_detection_enabled else CLR_TEXT_MUTED
-            if hasattr(self, "pb_weapon_threat") and self.pb_weapon_threat:
-                self.pb_weapon_threat.value = 0
-            if hasattr(self, "weapon_threat_card") and self.weapon_threat_card:
-                self.weapon_threat_card.bg_color = CLR_WHITE
-                self.weapon_threat_card.border_color = CLR_BORDER
-            if hasattr(self, "btn_weapon_threat_badge") and self.btn_weapon_threat_badge:
-                self.btn_weapon_threat_badge.text = "🛡️ Weapon AI: ACTIVE" if self.weapon_detection_enabled else "○ Weapon AI: DISABLED"
-                self.btn_weapon_threat_badge.background_color = CLR_GREEN_BG if self.weapon_detection_enabled else CLR_BORDER_LIGHT
-                self.btn_weapon_threat_badge.color = CLR_GREEN if self.weapon_detection_enabled else CLR_TEXT_MUTED
-
         return rich_faces
 
     # -------------------------------------------------------------------------
@@ -2863,158 +2528,6 @@ class FaceTraceApp(App):
         )
         self.suspect_alert_popup.bind(on_dismiss=lambda *args: setattr(self, "is_suspect_alert_showing", False))
         self.suspect_alert_popup.open()
-
-    def _trigger_automatic_weapon_alert(self, weapon_crop, conf, cam_label):
-        """Immediately displays a docked corner alert modal and triggers a tactical alarm sound."""
-        now = time.time()
-        # Cooldown check: prevent duplicate spam while weapon remains visible
-        if self.is_weapon_alert_showing or (now - self.last_weapon_alert_time < 12.0):
-            return
-        self.is_weapon_alert_showing = True
-        self.last_weapon_alert_time = now
-
-        # Audible tactical alarm chime in background thread
-        def _play_weapon_alert_sound():
-            try:
-                import winsound
-                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-                winsound.Beep(1800, 150)
-                time.sleep(0.05)
-                winsound.Beep(2200, 150)
-                time.sleep(0.05)
-                winsound.Beep(2600, 300)
-            except Exception:
-                pass
-        threading.Thread(target=_play_weapon_alert_sound, daemon=True).start()
-
-        # Save live weapon crop to temporary file
-        weapon_alert_img = os.path.join(CAPTURES_DIR, "live_weapon_alert.jpg")
-        try:
-            cv2.imwrite(weapon_alert_img, weapon_crop)
-            self.latest_weapon_crop_path = weapon_alert_img
-        except Exception:
-            pass
-
-        # Build Rich Weapon Alert Modal
-        modal_content = BoxLayout(orientation="vertical", spacing=6, padding=[10, 8, 10, 8])
-
-        # Crimson Alert Banner
-        banner = CardPanel(
-            bg_color=CLR_CRIMSON_BG,
-            border_color=CLR_CRIMSON,
-            radius=6,
-            orientation="vertical",
-            size_hint_y=None,
-            height=44,
-            padding=[8, 4, 8, 4]
-        )
-        conf_pct = int(conf * 100)
-        lbl_b1 = Label(
-            text=f"[b]🚨 CRITICAL ALERT: ARMED WEAPON DETECTED ({conf_pct}%)[/b]",
-            markup=True,
-            font_size="11sp",
-            color=CLR_CRIMSON,
-            size_hint_y=None,
-            height=16,
-            halign="left"
-        )
-        lbl_b1.bind(size=lbl_b1.setter("text_size"))
-        lbl_b2 = Label(
-            text=f"{cam_label} • {datetime.now().strftime('%H:%M:%S')} IST • Custom YOLOv8 Neural Scanner",
-            font_size="9sp",
-            color=CLR_TEXT_MUTED,
-            size_hint_y=None,
-            height=14,
-            halign="left"
-        )
-        lbl_b2.bind(size=lbl_b2.setter("text_size"))
-        banner.add_widget(lbl_b1)
-        banner.add_widget(lbl_b2)
-        modal_content.add_widget(banner)
-
-        # Center Inspection Row
-        comp_row = BoxLayout(orientation="horizontal", spacing=8, size_hint_y=1)
-
-        # Left: Live weapon crop
-        crop_col = BoxLayout(orientation="vertical", size_hint_x=0.55, spacing=2)
-        lbl_l = Label(text="[b]Detected Weapon Crop[/b]", markup=True, font_size="9sp", color=CLR_TEXT_MAIN, size_hint_y=None, height=14)
-        img_crop = Image(source=weapon_alert_img, allow_stretch=True, keep_ratio=True)
-        img_crop.reload()
-        crop_col.add_widget(lbl_l)
-        crop_col.add_widget(img_crop)
-        comp_row.add_widget(crop_col)
-
-        # Right: Threat Metrics
-        details_col = BoxLayout(orientation="vertical", size_hint_x=0.45, spacing=4)
-        lbl_score = Label(
-            text=f"[b]{conf_pct}%[/b]",
-            markup=True,
-            font_size="22sp",
-            color=CLR_CRIMSON,
-            halign="center"
-        )
-        lbl_desc = Label(
-            text="[b]ARMED THREAT[/b]\nFirearm/Blade Object\nClass: Weapon",
-            markup=True,
-            font_size="9sp",
-            color=CLR_TEXT_MUTED,
-            halign="center",
-            line_height=1.2
-        )
-        details_col.add_widget(lbl_score)
-        details_col.add_widget(lbl_desc)
-        comp_row.add_widget(details_col)
-
-        modal_content.add_widget(comp_row)
-
-        # Action Buttons
-        btn_row = BoxLayout(orientation="horizontal", spacing=8, size_hint_y=None, height=30)
-        btn_dispatch = Button(
-            text="🚨 Dispatch Armed Response",
-            background_normal="",
-            background_color=CLR_CRIMSON,
-            color=CLR_WHITE,
-            bold=True,
-            font_size="10sp"
-        )
-        def _on_dispatch_armed(btn):
-            if hasattr(self, "weapon_alert_popup") and self.weapon_alert_popup:
-                self.weapon_alert_popup.dismiss()
-            self.is_weapon_alert_showing = False
-            self._show_info_popup("Armed Response Dispatched", f"🚨 Priority Code 1 Alert Transmitted to Rapid Armed Response Unit.\nLocation: ATM Vestibule ({cam_label})\nEvidence image locked.")
-
-        btn_dispatch.bind(on_press=_on_dispatch_armed)
-        btn_row.add_widget(btn_dispatch)
-
-        btn_dismiss = Button(
-            text="🔕 Acknowledge",
-            background_normal="",
-            background_color=CLR_BORDER_LIGHT,
-            color=CLR_TEXT_MAIN,
-            bold=True,
-            font_size="10sp"
-        )
-        def _on_dismiss_w(btn):
-            if hasattr(self, "weapon_alert_popup") and self.weapon_alert_popup:
-                self.weapon_alert_popup.dismiss()
-            self.is_weapon_alert_showing = False
-
-        btn_dismiss.bind(on_press=_on_dismiss_w)
-        btn_row.add_widget(btn_dismiss)
-        modal_content.add_widget(btn_row)
-
-        # Bottom-Right Docked Notification (Zero center obstruction)
-        self.weapon_alert_popup = CornerAlertPopup(
-            title=f"🚨 WEAPON DETECTED — {conf_pct}% THREAT",
-            content=modal_content,
-            size_hint=(None, None),
-            size=(450, 270),
-            pos_hint={"right": 0.99, "y": 0.02},
-            overlay_color=(0, 0, 0, 0),
-            auto_dismiss=False
-        )
-        self.weapon_alert_popup.bind(on_dismiss=lambda *args: setattr(self, "is_weapon_alert_showing", False))
-        self.weapon_alert_popup.open()
 
     def _show_alert_popup(self):
         """Manual click on bell icon opens watchlist status."""
@@ -3581,100 +3094,16 @@ class FaceTraceApp(App):
                 except Exception as e:
                     pass
 
-            # -----------------------------------------------------------------
-            # YOLOv8 WEAPON DETECTION PASS ON VIDEO FRAME
-            # -----------------------------------------------------------------
-            weapon_detected_in_frame = False
-            best_weapon_conf = 0.0
-            if self.weapon_detection_enabled and self.weapon_detector is not None:
-                try:
-                    w_res = self.weapon_detector.predict(frame, conf=0.20, imgsz=320, verbose=False)
-                    if w_res and len(w_res) > 0 and w_res[0].boxes is not None:
-                        for wb in w_res[0].boxes:
-                            wxy = wb.xyxy[0].cpu().numpy()
-                            wc_val = float(wb.conf[0].cpu().numpy())
-                            wx1 = max(0, int(wxy[0]))
-                            wy1 = max(0, int(wxy[1]))
-                            wx2 = min(fw, int(wxy[2]))
-                            wy2 = min(fh, int(wxy[3]))
-                            ww = wx2 - wx1
-                            wh = wy2 - wy1
-
-                            if ww > 15 and wh > 15:
-                                weapon_detected_in_frame = True
-                                w_display_conf = round(wc_val * 100, 1)
-                                best_weapon_conf = max(best_weapon_conf, w_display_conf)
-
-                                # Draw weapon hazard box on disp_frame (Solid Crimson + Amber Outline)
-                                cv2.rectangle(disp_frame, (wx1, wy1), (wx2, wy2), (20, 20, 220), 2)
-                                cv2.rectangle(disp_frame, (max(0, wx1 - 2), max(0, wy1 - 2)), (min(fw, wx2 + 2), min(fh, wy2 + 2)), (0, 165, 255), 1)
-
-                                # Corner ticks
-                                ts = 12
-                                cv2.line(disp_frame, (wx1, wy1 + ts), (wx1 + ts, wy1), (0, 215, 255), 2)
-                                cv2.line(disp_frame, (wx2 - ts, wy1), (wx2, wy1 + ts), (0, 215, 255), 2)
-                                cv2.line(disp_frame, (wx1, wy2 - ts), (wx1 + ts, wy2), (0, 215, 255), 2)
-                                cv2.line(disp_frame, (wx2 - ts, wy2), (wx2, wy2 - ts), (0, 215, 255), 2)
-
-                                # Tag
-                                cv2.rectangle(disp_frame, (wx1, max(0, wy1 - 22)), (wx1 + 190, max(0, wy1)), (20, 20, 220), -1)
-                                cv2.putText(disp_frame, f"[!] WEAPON: {w_display_conf}%", (wx1 + 4, max(14, wy1 - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 255, 255), 1)
-
-                                # If significant confidence, record weapon event in timeline
-                                if wc_val >= 0.15 and (time.time() - last_beep_time > 1.2):
-                                    time_sec = frame_idx / fps
-                                    ts_str = f"{int(time_sec // 60):02d}:{int(time_sec % 60):02d}.{int((time_sec % 1) * 10)}"
-                                    w_crop = frame[max(0, wy1 - 10):min(fh, wy2 + 10), max(0, wx1 - 10):min(fw, wx2 + 10)].copy()
-
-                                    w_match_idx = len(matches_found) + 1
-                                    w_face_out_path = os.path.join(out_dir, f"weapon_{w_match_idx}_crop.jpg")
-                                    w_frame_out_path = os.path.join(out_dir, f"weapon_{w_match_idx}_frame.jpg")
-                                    cv2.imwrite(w_face_out_path, w_crop)
-                                    cv2.imwrite(w_frame_out_path, frame)
-
-                                    w_entry = {
-                                        "index": w_match_idx,
-                                        "type": "weapon",
-                                        "frame_idx": frame_idx,
-                                        "timestamp_str": ts_str,
-                                        "time_sec": round(time_sec, 2),
-                                        "similarity": w_display_conf,
-                                        "face_path": w_face_out_path,
-                                        "frame_path": w_frame_out_path,
-                                        "suspect_name": "ARMED WEAPON"
-                                    }
-                                    matches_found.append(w_entry)
-
-                                    last_beep_time = time.time()
-                                    def _w_beep():
-                                        try:
-                                            import winsound
-                                            winsound.Beep(1800, 150)
-                                            time.sleep(0.04)
-                                            winsound.Beep(2200, 200)
-                                        except: pass
-                                    threading.Thread(target=_w_beep, daemon=True).start()
-
-                                    Clock.schedule_once(lambda dt, m=w_entry: self._on_video_scan_match_found(m))
-                except Exception as ex:
-                    pass
-
             time_elapsed = time.time() - start_time
             scan_fps = round(frame_idx / max(0.01, time_elapsed), 1)
             pct_done = min(100.0, (frame_idx / max(1, total_frames)) * 100.0)
 
             # Draw banner if matched
-            if matched_in_this_frame and weapon_detected_in_frame:
-                cv2.rectangle(disp_frame, (0, 0), (fw, 32), (0, 0, 180), -1)
-                cv2.putText(disp_frame, f"CODE RED: SUSPECT ({best_match_pct}%) & ARMED WEAPON ({best_weapon_conf}%) DETECTED!", (10, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 255), 2)
-            elif matched_in_this_frame:
+            if matched_in_this_frame:
                 cv2.rectangle(disp_frame, (0, 0), (fw, 28), (25, 25, 220), -1)
                 cv2.putText(disp_frame, f"SUSPECT MATCH DETECTED! CONFIDENCE: {best_match_pct}%", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 2)
-            elif weapon_detected_in_frame:
-                cv2.rectangle(disp_frame, (0, 0), (fw, 28), (20, 20, 220), -1)
-                cv2.putText(disp_frame, f"SECURITY ALERT: ARMED WEAPON DETECTED! CONFIDENCE: {best_weapon_conf}%", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 2)
 
-            Clock.schedule_once(lambda dt, f=disp_frame, p=pct_done, fi=frame_idx, tf=total_frames, sf=scan_fps, mc=len(matches_found), mi=(matched_in_this_frame or weapon_detected_in_frame), bp=max(best_match_pct, best_weapon_conf):
+            Clock.schedule_once(lambda dt, f=disp_frame, p=pct_done, fi=frame_idx, tf=total_frames, sf=scan_fps, mc=len(matches_found), mi=matched_in_this_frame, bp=best_match_pct:
                                 self._on_video_scan_progress(f, p, fi, tf, sf, mc, mi, bp))
 
             time.sleep(0.004)
@@ -3707,25 +3136,17 @@ class FaceTraceApp(App):
         if hasattr(self, "lbl_matches_count") and self.lbl_matches_count:
             self.lbl_matches_count.text = f"[b]🚨 Detected Events ({count})[/b]"
 
-        is_weapon = (match.get("type") == "weapon")
-
         # Flash alert toast banner above video
         if hasattr(self, "alert_toast_card") and self.alert_toast_card:
-            self.alert_toast_card.bg_color = CLR_CRIMSON_BG if is_weapon else CLR_RED_BG
-            self.alert_toast_card.border_color = CLR_CRIMSON if is_weapon else CLR_RED_BORDER
+            self.alert_toast_card.bg_color = CLR_RED_BG
+            self.alert_toast_card.border_color = CLR_RED_BORDER
         if hasattr(self, "lbl_video_alert_toast") and self.lbl_video_alert_toast:
-            if is_weapon:
-                self.lbl_video_alert_toast.text = f"[b]⚠️ ARMED WEAPON DETECTED AT [{match['timestamp_str']}] ({match['similarity']}% CONFIDENCE)![/b]"
-                self.lbl_video_alert_toast.color = CLR_CRIMSON
-            else:
-                self.lbl_video_alert_toast.text = f"[b]🚨 SUSPECT MATCH FOUND AT [{match['timestamp_str']}] ({match['similarity']}% CONFIDENCE)![/b]"
-                self.lbl_video_alert_toast.color = CLR_RED
+            self.lbl_video_alert_toast.text = f"[b]🚨 SUSPECT MATCH FOUND AT [{match['timestamp_str']}] ({match['similarity']}% CONFIDENCE)![/b]"
+            self.lbl_video_alert_toast.color = CLR_RED
 
         # Create Match Card in timeline
         if hasattr(self, "matches_layout") and self.matches_layout:
-            card_bg = CLR_CRIMSON_BG if is_weapon else CLR_WHITE
-            card_border = CLR_CRIMSON if is_weapon else CLR_BORDER
-            m_card = CardPanel(bg_color=card_bg, border_color=card_border, radius=6, orientation="horizontal", size_hint_y=None, height=52, padding=[6, 4, 6, 4], spacing=8)
+            m_card = CardPanel(bg_color=CLR_WHITE, border_color=CLR_BORDER, radius=6, orientation="horizontal", size_hint_y=None, height=52, padding=[6, 4, 6, 4], spacing=8)
             
             # Crop image
             img_thumb = Image(source=match["face_path"], size_hint_x=0.25, allow_stretch=True, keep_ratio=True)
@@ -3733,12 +3154,8 @@ class FaceTraceApp(App):
 
             # Info
             info_col = BoxLayout(orientation="vertical", size_hint_x=0.55, spacing=2)
-            if is_weapon:
-                lbl_ts = Label(text=f"[b]⚠️ WEAPON AT {match['timestamp_str']}[/b]", markup=True, font_size="10sp", color=CLR_CRIMSON, halign="left")
-                lbl_sc = Label(text=f"Threat: [b]{match['similarity']}% (YOLOv8)[/b]", markup=True, font_size="10sp", color=CLR_CRIMSON, halign="left")
-            else:
-                lbl_ts = Label(text=f"[b]⏱ {match['timestamp_str']}[/b] (Frame #{match['frame_idx']})", markup=True, font_size="10sp", color=CLR_TEXT_MAIN, halign="left")
-                lbl_sc = Label(text=f"Match: [b]{match['similarity']}%[/b]", markup=True, font_size="10sp", color=CLR_RED, halign="left")
+            lbl_ts = Label(text=f"[b]⏱ {match['timestamp_str']}[/b] (Frame #{match['frame_idx']})", markup=True, font_size="10sp", color=CLR_TEXT_MAIN, halign="left")
+            lbl_sc = Label(text=f"Match: [b]{match['similarity']}%[/b]", markup=True, font_size="10sp", color=CLR_RED, halign="left")
             
             lbl_ts.bind(size=lbl_ts.setter("text_size"))
             lbl_sc.bind(size=lbl_sc.setter("text_size"))
