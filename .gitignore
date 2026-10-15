@@ -32,6 +32,8 @@ weights/
 models/**/weights/
 models/**/best.pt
 models/**/last.pt
+models/**/run*/
+
 
 # IDEs and Editors
 .vscode/

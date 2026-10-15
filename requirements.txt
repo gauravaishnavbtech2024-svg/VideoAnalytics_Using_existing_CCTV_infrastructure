@@ -17,3 +17,4 @@ uvicorn>=0.23.0
 python-multipart>=0.0.6
 pymongo>=4.5.0
 pydantic>=2.0.0
+kivy[base]>=2.3.1

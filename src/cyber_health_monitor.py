@@ -70,20 +70,23 @@ class CyberSecurityHealthMonitor:
         print("[CyberSecurity Monitor] Watchdog active — monitoring 10 security vectors.")
 
     def _init_model_hashes(self) -> None:
-        """Compute initial SHA-256 cryptographic fingerprints for all AI models."""
+        """Compute initial SHA-256 cryptographic fingerprints for primary AI models."""
         models_dir = PROJECT_ROOT / "models"
         if not models_dir.exists():
             return
 
-        for m_file in models_dir.rglob("*.onnx"):
-            if m_file.is_file():
+        count = 0
+        for m_file in models_dir.rglob("best.pt"):
+            if m_file.is_file() and "run_" not in m_file.as_posix() and count < 6:
                 rel = m_file.relative_to(PROJECT_ROOT).as_posix()
                 self.baseline_hashes[rel] = self._sha256(m_file)
+                count += 1
 
-        for m_file in models_dir.rglob("*.pt"):
-            if m_file.is_file() and m_file.stat().st_size > 500000:
+        for m_file in models_dir.rglob("*.onnx"):
+            if m_file.is_file() and count < 10:
                 rel = m_file.relative_to(PROJECT_ROOT).as_posix()
                 self.baseline_hashes[rel] = self._sha256(m_file)
+                count += 1
 
 
     def _init_config_watcher(self) -> None:
